@@ -1,0 +1,23 @@
+{
+  "name": "product-catalogue-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --watch src/server.ts",
+    "build": "tsc",
+    "start": "node --env-file-if-exists=.env dist/server.js",
+    "test": "npm run build && node --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "~6.0.0"
+  }
+}
