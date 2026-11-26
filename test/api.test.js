@@ -115,3 +115,56 @@ test("invalid startup settings fail explicitly", () => {
   assert.throws(() => readConfig({ PORT: "70000" }), /PORT/);
   assert.throws(() => readConfig({ UPSTREAM_TIMEOUT_MS: "0" }), /UPSTREAM_TIMEOUT_MS/);
 });
+
+test("wildcard CORS allows any browser origin without credentials", async t => {
+  const get = await serve(t, () => Response.json(products));
+  for (const origin of ["http://localhost:5173", "https://client.example.org"]) {
+    const res = await get("/api/products", { headers: { Origin: origin } });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("access-control-allow-origin"), "*");
+    assert.equal(res.headers.get("access-control-allow-credentials"), null);
+    assert.deepEqual(await res.json(), products);
+  }
+});
+
+test("JSON enquiry preflights do not call upstream or consume enquiry attempts", async t => {
+  let calls = 0;
+  const send = await serve(t, () => { calls++; return Response.error(); });
+  for (let i = 0; i < 6; i++) {
+    const res = await send("/api/enquiries", {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://client.example.org",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type"
+      }
+    });
+    assert.equal(res.status, 204);
+    assert.equal(res.headers.get("access-control-allow-origin"), "*");
+    assert.ok(res.headers.get("access-control-allow-methods").split(",").includes("POST"));
+    assert.equal(res.headers.get("access-control-allow-headers").toLowerCase(), "content-type");
+    assert.equal(await res.text(), "");
+  }
+  assert.equal((await send("/api/enquiries", post(enquiry))).status, 503);
+  assert.equal(calls, 0);
+});
+
+test("CORS headers remain present on validation, upstream, and rate-limit errors", async t => {
+  const send = await serve(t, () => new Response(null, { status: 403 }));
+  const headers = { Origin: "https://client.example.org" };
+  for (const [path, status] of [["/api/products/0", 400], ["/api/products", 502]]) {
+    const res = await send(path, { headers });
+    assert.equal(res.status, status);
+    assert.equal(res.headers.get("access-control-allow-origin"), "*");
+  }
+  for (let i = 0; i < 6; i++) {
+    const options = post(enquiry);
+    const res = await send("/api/enquiries", { ...options, headers: { ...options.headers, ...headers } });
+    assert.equal(res.status, i === 5 ? 429 : 503);
+    assert.equal(res.headers.get("access-control-allow-origin"), "*");
+    if (i === 5) {
+      assert.ok(res.headers.get("access-control-expose-headers").split(",").includes("Retry-After"));
+      assert.ok(Number(res.headers.get("retry-after")) > 0);
+    }
+  }
+});

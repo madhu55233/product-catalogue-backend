@@ -1,4 +1,5 @@
 import express, { type ErrorRequestHandler } from "express";
+import cors from "cors";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import type { Config } from "./config.ts";
@@ -28,6 +29,13 @@ export function createApp(config: Config, request: typeof fetch = fetch) {
   const app = express();
   const service = createServices(config, request);
   app.disable("x-powered-by");
+  app.use(cors({
+    origin: "*",
+    methods: ["GET", "HEAD", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+    exposedHeaders: ["Retry-After", "RateLimit", "RateLimit-Policy"],
+    credentials: false
+  }));
   if (config.TRUSTED_PROXY_IP) app.set("trust proxy", config.TRUSTED_PROXY_IP);
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
   app.use("/api", limiter(120));

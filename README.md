@@ -27,7 +27,9 @@ Set all three email variables or omit all three. With none, browsing works and v
 
 ## API
 
-All responses are JSON. Successful reads return `200`. Query values must be URL-encoded; unknown or repeated query parameters are rejected.
+All application responses are JSON. Successful reads return `200`. Query values must be URL-encoded; unknown or repeated query parameters are rejected.
+
+CORS currently allows all origins (`Access-Control-Allow-Origin: *`) without credentials. Browser clients can make GET/HEAD and JSON POST requests; OPTIONS preflights return an empty `204` without consuming enquiry attempts. The allowed request header is `Content-Type`; `Retry-After`, `RateLimit`, and `RateLimit-Policy` are exposed to browser code. Do not use `credentials: "include"`. This intentionally permits any website to call the API; restrict origins before adding cookie-based authentication. CORS does not resolve upstream service blocks or configure email delivery.
 
 | Method and path | Successful response |
 | --- | --- |
