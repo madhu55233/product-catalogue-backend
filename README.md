@@ -21,7 +21,7 @@ Visit `http://localhost:3000/health`. For a compiled run use `npm run build` the
 | `RESEND_API_KEY` | Resend key with permission to send email. Keep it server-side. |
 | `ENQUIRY_FROM` | Sender email address on a domain verified in Resend. |
 | `ENQUIRY_TO` | Fixed sales inbox. The client cannot override the recipient. |
-| `TRUSTED_PROXY_IP` | Optional IP of your trusted reverse proxy. Without it, limits use the socket peer. |
+| `TRUST_PROXY_HOPS` | Number of reverse proxies in front of the app whose `X-Forwarded-For` entries are trusted, `0`-`10`; default `0` (rate limits use the socket peer). See Deploy step 4. |
 
 Set all three email variables or omit all three. With none, browsing works and valid enquiries return `503`; partial or invalid configuration prevents startup.
 
@@ -57,12 +57,12 @@ curl -i http://localhost:3000/api/enquiries \
 
 Required fields: `name` (1-100 trimmed characters), `email` (valid address, max 254), `message` (1-3000 trimmed characters). Optional `productId` is a positive integer reference, not a stock check. Extra fields are rejected. Messages are sent as plain text; the buyer is the reply-to address.
 
-Errors use `{"error":"..."}`: `400` invalid input or malformed JSON; `404` unknown route or missing product; `413` body exceeds 32 KiB; `415` unsupported content type/encoding; `429` rate limit (respect `Retry-After`); `502` upstream failure or invalid response; `503` email disabled; `504` upstream deadline exceeded. An email timeout leaves acceptance unknown; check Resend before retrying to avoid duplicates. There is no automatic retry or mock email fallback.
+Errors use `{"error":"..."}`: `400` invalid input or malformed JSON; `404` unknown route or missing product; `413` body exceeds 32 KiB; `415` unsupported content type/encoding; `429` rate limit (respect `Retry-After`); `502` upstream failure or invalid response; `503` email disabled; `504` upstream deadline exceeded. The cause of each `502`/`504`, such as `fakestoreapi.com responded 403 (Cloudflare challenge)`, is logged server-side and never sent to clients. An email timeout leaves acceptance unknown; check Resend before retrying to avoid duplicates. There is no automatic retry or mock email fallback.
 
 ## Deploy
 
-1. Create a Node web service on your host with Node 22.18+ and outbound HTTPS access to `fakestoreapi.com` and `api.resend.com`. No database, migrations, or volumes are needed.
+1. Create a Node web service on your host with Node 22.18+ and outbound HTTPS access to `fakestoreapi.com` and `api.resend.com`. No database, migrations, or volumes are needed. Fake Store's Cloudflare protection challenges requests from some cloud hosts, including Render; there every catalogue route returns `502`. To check a host, run `curl -s -o /dev/null -w '%{http_code}\n' https://fakestoreapi.com/products` from it and expect `200` (don't use `curl -I`: Cloudflare challenges HEAD requests even where GET works).
 2. Use `npm ci --include=dev && npm run build` as the build command and `npm start` as the start command. Deploy the compiled `dist` and production dependencies if using separate build and runtime stages.
 3. Supply the environment variables above using the host's secret manager. The service binds to `0.0.0.0` on the configured port. Terminate TLS at the host/proxy and use `/health` for health checks.
-4. API limits are 120 requests/minute per client IP, with an additional 5 attempts/minute for enquiries. Counters are in memory per process and reset on restart. Behind a proxy, trust only its IP and ensure it overwrites untrusted forwarded headers. For multiple replicas, enforce shared limits at the ingress.
+4. API limits are 120 requests/minute per client IP, with an additional 5 attempts/minute for enquiries. Counters are in memory per process and reset on restart. Behind proxies (Render, Heroku, a load balancer), set `TRUST_PROXY_HOPS` to exactly the number of proxies that append to `X-Forwarded-For`: too low and all visitors share one limit (express-rate-limit logs `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR`); too high and clients can dodge limits by sending a fake `X-Forwarded-For`. Confirm the value after deploying by checking that the limiter keys on your own public IP, including when you send a fake `X-Forwarded-For`. For multiple replicas, enforce shared limits at the ingress.
 5. Smoke-test `/api/categories` and `/api/products/1`. For email, send a controlled enquiry to your real sales inbox, verify its provider ID in Resend, then confirm receipt separately. Automated tests use isolated HTTP fixtures and do not send mail.

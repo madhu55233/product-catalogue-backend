@@ -5,10 +5,13 @@ import { createApp } from "../dist/app.js";
 import { readConfig } from "../dist/config.js";
 
 async function serve(t, upstream, env = {}) {
-  const server = createApp(readConfig(env), upstream).listen(0, "127.0.0.1");
+  const logs = [];
+  const server = createApp(readConfig(env), upstream, message => logs.push(message)).listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => new Promise(resolve => server.close(resolve)));
-  return (path, options) => fetch(`http://127.0.0.1:${server.address().port}${path}`, options);
+  const call = (path, options) => fetch(`http://127.0.0.1:${server.address().port}${path}`, options);
+  call.logs = logs;
+  return call;
 }
 
 const products = [1, 2, 3, 4, 5, 6].map(id => ({
@@ -19,6 +22,8 @@ const products = [1, 2, 3, 4, 5, 6].map(id => ({
 const enquiry = { name: "Buyer", email: "buyer@example.org", message: "Is this in stock?", productId: 2 };
 const mail = { ENQUIRY_TO: "sales@example.org", ENQUIRY_FROM: "app@example.org", RESEND_API_KEY: "test-only" };
 const post = body => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const hang = (_url, { signal }) => new Promise((_resolve, reject) =>
+  signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
 
 test("catalogue routes return the documented shapes, filters, and ranking", async t => {
   const get = await serve(t, async url => {
@@ -39,6 +44,7 @@ test("catalogue routes return the documented shapes, filters, and ranking", asyn
     assert.equal(res.status, 200, path);
     assert.deepEqual(await res.json(), expected, path);
   }
+  assert.deepEqual(get.logs, []);
 });
 
 test("invalid parameters and invalid enquiry inputs are rejected before upstream calls", async t => {
@@ -66,11 +72,28 @@ test("detail distinguishes missing products from upstream failures", async t => 
   }
 });
 
-test("upstream abort produces a gateway timeout", async t => {
-  const get = await serve(t, (_url, { signal }) => new Promise((_resolve, reject) =>
-    signal.addEventListener("abort", () => reject(signal.reason), { once: true })
-  ), { UPSTREAM_TIMEOUT_MS: "25" });
-  assert.equal((await get("/api/products")).status, 504);
+test("Fake Store failures return 502/504 and log the cause server-side only", async t => {
+  for (const [label, upstream, status, cause] of [
+    ["Cloudflare challenge", () => new Response("<html>Just a moment...</html>",
+      { status: 403, headers: { "cf-mitigated": "challenge" } }), 502, "fakestoreapi.com responded 403 (Cloudflare challenge)"],
+    ["server error", () => new Response(null, { status: 503 }), 502, "fakestoreapi.com responded 503"],
+    ["invalid JSON", () => new Response("oops"), 502, "fakestoreapi.com returned invalid JSON"],
+    ["unexpected shape", () => Response.json([{ id: 1 }]), 502, "fakestoreapi.com returned unexpected data"],
+    ["network failure", () => { throw new TypeError("fetch failed"); }, 502, "fakestoreapi.com request failed"],
+    ["timeout", hang, 504, "fakestoreapi.com timed out after 25 ms"]
+  ]) {
+    const get = await serve(t, upstream, { UPSTREAM_TIMEOUT_MS: "25" });
+    const res = await get("/api/products");
+    assert.equal(res.status, status, label);
+    assert.doesNotMatch(await res.text(), /fakestoreapi/, label);
+    assert.deepEqual(get.logs, [`GET /api/products failed: ${cause}`], label);
+  }
+});
+
+test("email provider abort produces a gateway timeout", async t => {
+  const send = await serve(t, hang, { ...mail, UPSTREAM_TIMEOUT_MS: "25" });
+  assert.equal((await send("/api/enquiries", post(enquiry))).status, 504);
+  assert.deepEqual(send.logs, ["POST /api/enquiries failed: api.resend.com timed out after 25 ms"]);
 });
 
 test("enquiries fail closed without configuration, on rejection, and without a receipt", async t => {
@@ -114,6 +137,22 @@ test("invalid startup settings fail explicitly", () => {
   assert.throws(() => readConfig({ ENQUIRY_TO: mail.ENQUIRY_TO }), /all three/);
   assert.throws(() => readConfig({ PORT: "70000" }), /PORT/);
   assert.throws(() => readConfig({ UPSTREAM_TIMEOUT_MS: "0" }), /UPSTREAM_TIMEOUT_MS/);
+  for (const hops of ["-1", "1.5", "11", "yes"]) {
+    assert.throws(() => readConfig({ TRUST_PROXY_HOPS: hops }), /TRUST_PROXY_HOPS/, hops);
+  }
+  assert.equal(readConfig({}).TRUST_PROXY_HOPS, 0);
+});
+
+test("trusted proxy hops give each client its own limit and ignore spoofed forwarded entries", async t => {
+  const send = await serve(t, () => { throw new Error("unexpected call"); }, { TRUST_PROXY_HOPS: "1" });
+  const from = (forwardedFor) => {
+    const options = post(enquiry);
+    return send("/api/enquiries", { ...options, headers: { ...options.headers, "X-Forwarded-For": forwardedFor } });
+  };
+  // The proxy appends the real client address last; anything before it is client-supplied.
+  for (let i = 0; i < 5; i++) assert.equal((await from(`198.51.100.${i}, 203.0.113.7`)).status, 503);
+  assert.equal((await from("198.51.100.99, 203.0.113.7")).status, 429);
+  assert.equal((await from("203.0.113.8")).status, 503);
 });
 
 test("wildcard CORS allows any browser origin without credentials", async t => {

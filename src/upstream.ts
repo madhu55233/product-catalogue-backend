@@ -3,9 +3,12 @@ import type { Config } from "./config.ts";
 
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  /** Server-side diagnostic for logs; never sent to clients. */
+  readonly detail: string | undefined;
+  constructor(status: number, message: string, detail?: string) {
     super(message);
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -30,21 +33,29 @@ const store = "https://fakestoreapi.com/products";
 
 export function createServices(config: Config, request: typeof fetch = fetch) {
   async function json<T>(url: string, schema: z.ZodType<T>, init: RequestInit = {}, detail = false) {
+    const host = new URL(url).host;
     const signal = AbortSignal.timeout(config.UPSTREAM_TIMEOUT_MS);
     try {
       const response = await request(url, { ...init, redirect: "error", signal });
       if (!response.ok) {
         await response.body?.cancel();
         if (detail && response.status === 404) throw new ApiError(404, "Product not found.");
-        throw new ApiError(502, "Upstream service failed.");
+        const challenge = response.headers.get("cf-mitigated");
+        throw new ApiError(502, "Upstream service failed.",
+          `${host} responded ${response.status}${challenge ? ` (Cloudflare ${challenge})` : ""}`);
       }
       const text = await response.text();
       if (detail && ["", "null"].includes(text.trim())) throw new ApiError(404, "Product not found.");
       return schema.parse(JSON.parse(text));
     } catch (error) {
       if (error instanceof ApiError) throw error;
-      if (signal.aborted) throw new ApiError(504, "Upstream service timed out.");
-      throw new ApiError(502, "Upstream service unavailable or returned invalid data.");
+      if (signal.aborted) {
+        throw new ApiError(504, "Upstream service timed out.",
+          `${host} timed out after ${config.UPSTREAM_TIMEOUT_MS} ms`);
+      }
+      const reason = error instanceof z.ZodError ? "returned unexpected data"
+        : error instanceof SyntaxError ? "returned invalid JSON" : "request failed";
+      throw new ApiError(502, "Upstream service unavailable or returned invalid data.", `${host} ${reason}`);
     }
   }
 
@@ -53,7 +64,10 @@ export function createServices(config: Config, request: typeof fetch = fetch) {
     products: () => json(store, z.array(product)),
     async detail(id: number) {
       const item = await json(`${store}/${id}`, product, {}, true);
-      if (item.id !== id) throw new ApiError(502, "Upstream returned the wrong product.");
+      if (item.id !== id) {
+        throw new ApiError(502, "Upstream returned the wrong product.",
+          `fakestoreapi.com returned product ${item.id} for ${id}`);
+      }
       return item;
     },
     async send(input: z.infer<typeof enquiry>) {

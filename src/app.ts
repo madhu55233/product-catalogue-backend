@@ -25,7 +25,8 @@ const empty = z.strictObject({});
 const term = z.string().trim().min(1).max(100);
 const id = z.string().regex(/^[1-9]\d*$/).transform(Number).pipe(z.number().int().positive());
 
-export function createApp(config: Config, request: typeof fetch = fetch) {
+export function createApp(config: Config, request: typeof fetch = fetch,
+  log: (message: string) => void = console.warn) {
   const app = express();
   const service = createServices(config, request);
   app.disable("x-powered-by");
@@ -36,7 +37,8 @@ export function createApp(config: Config, request: typeof fetch = fetch) {
     exposedHeaders: ["Retry-After", "RateLimit", "RateLimit-Policy"],
     credentials: false
   }));
-  if (config.TRUSTED_PROXY_IP) app.set("trust proxy", config.TRUSTED_PROXY_IP);
+  // Only set when configured: express-rate-limit warns about X-Forwarded-For while trust proxy is false.
+  if (config.TRUST_PROXY_HOPS > 0) app.set("trust proxy", config.TRUST_PROXY_HOPS);
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
   app.use("/api", limiter(120));
 
@@ -71,9 +73,10 @@ export function createApp(config: Config, request: typeof fetch = fetch) {
     res.status(202).json({ status: "accepted", id: receipt.id });
   });
   app.use((_req, res) => res.status(404).json({ error: "Route not found." }));
-  const onError: ErrorRequestHandler = (err: unknown, _req, res, next) => {
+  const onError: ErrorRequestHandler = (err: unknown, req, res, next) => {
     if (res.headersSent) return next(err);
     if (err instanceof ApiError) {
+      if (err.detail) log(`${req.method} ${req.path} failed: ${err.detail}`);
       res.status(err.status).json({ error: err.message });
       return;
     }

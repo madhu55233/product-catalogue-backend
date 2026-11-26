@@ -1,10 +1,9 @@
-import { isIP } from "node:net";
 import { z } from "zod";
 
 const settings = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   UPSTREAM_TIMEOUT_MS: z.coerce.number().int().min(1).max(60000).default(5000),
-  TRUSTED_PROXY_IP: z.string().refine(ip => isIP(ip) !== 0).optional(),
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
   RESEND_API_KEY: z.string().regex(/^\S+$/).optional(),
   ENQUIRY_FROM: z.email().optional(),
   ENQUIRY_TO: z.email().optional()
