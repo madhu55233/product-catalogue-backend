@@ -4,15 +4,90 @@ A database-free Node.js/TypeScript HTTP API. Catalogue reads fetch current data 
 
 ## Run locally
 
-Use Node.js 22.18+ and npm:
+### 1. Prerequisites
+
+Install Node.js 22.18 or newer, npm, and Git. Check your installation:
 
 ```sh
+node --version
+npm --version
+```
+
+No database is required. Product requests need an internet connection to Fake Store API.
+
+### 2. Download and install
+
+```sh
+git clone https://github.com/madhu55233/product-catalogue-backend.git
+cd product-catalogue-backend
 npm ci
-npm test
+```
+
+If you already have the repository, open a terminal in its root directory (the folder containing `package.json`) and run `npm ci`.
+
+### 3. Start the development server
+
+No environment configuration is needed to browse products locally:
+
+```sh
 npm run dev
 ```
 
-Visit `http://localhost:3000/health`. For a compiled run use `npm run build` then `npm start`. The dev and start commands load an optional local `.env`; environment variables set by the host take precedence.
+The terminal should print `Catalogue API listening on port 3000`. Keep that terminal open; the server automatically restarts when source files change. Press **Ctrl+C** to stop it.
+
+### 4. Check the API
+
+Open these URLs in your browser, or run the commands in a second terminal:
+
+```sh
+curl http://localhost:3000/health
+curl http://localhost:3000/api/categories
+curl http://localhost:3000/api/products
+curl http://localhost:3000/api/products/1
+curl "http://localhost:3000/api/products/search?q=bag"
+```
+
+- [Health](http://localhost:3000/health) should return `{"status":"ok"}`.
+- [Products](http://localhost:3000/api/products) should return a JSON array when Fake Store API is reachable.
+- The root URL `http://localhost:3000/` returns `404`: this is an API, not a frontend website.
+
+### 5. Connect your local client
+
+Use `http://localhost:3000` as the backend base URL and append the endpoint path:
+
+```js
+const response = await fetch("http://localhost:3000/api/products");
+if (!response.ok) throw new Error(`Catalogue request failed: ${response.status}`);
+const products = await response.json();
+```
+
+Cross-origin requests from a local frontend (for example, `http://localhost:5173`) are allowed. Do not set `credentials: "include"`. On another device, `localhost` refers to that device, not the computer running this backend.
+
+### Tests and compiled mode
+
+Run the automated tests (includes the TypeScript build; does not send real email):
+
+```sh
+npm test
+```
+
+To run compiled JavaScript instead of development watch mode, stop the development server first:
+
+```sh
+npm run build
+npm start
+```
+
+### Local troubleshooting
+
+- **Connection refused:** start the server and check its terminal for startup errors.
+- **Port 3000 already in use (`EADDRINUSE`):** stop your existing server, or set `PORT` to another value and update the client base URL.
+- **`502` or `504` on product routes:** inspect the server logs for an upstream rejection, invalid response, or timeout. A successful health check only confirms that this backend is running.
+- **`503` on enquiries:** configure all three Resend variables below to enable real email. Without them, enquiries intentionally fail rather than report mock success.
+
+### Environment configuration
+
+The dev and start commands load an optional local `.env` in the repository root; environment variables set by the host take precedence. For local development without a reverse proxy, leave `TRUST_PROXY_HOPS` at `0`. Restart the server after changing environment settings. Never commit email credentials.
 
 | Environment variable | Meaning |
 | --- | --- |
